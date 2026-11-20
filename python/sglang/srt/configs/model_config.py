@@ -769,6 +769,9 @@ class ModelConfig:
         if is_embedding_nemotron3(self.hf_config):
             # A bare Ministral3 backbone configured as a mean-pooled embedder.
             self.hf_config.architectures = ["EmbeddingNemotron3Model"]
+        elif is_embedding_nemotron35(self.hf_config):
+            # The multimodal backbone has no language-modeling head.
+            self.hf_config.architectures = ["EmbeddingNemotron35Model"]
         self.joint_head_config = None
         if self.hf_config.architectures == ["Qwen3_5ForConditionalGeneration"]:
             self.joint_head_config = load_joint_head_config(self.model_path, revision)
@@ -2550,6 +2553,20 @@ def is_embedding_nemotron3(config) -> bool:
     )
 
 
+def is_embedding_nemotron35(config) -> bool:
+    """Identify the bidirectional, mean-pooled Mistral3 embedding checkpoint.
+
+    Bare Mistral3 backbones can also be causal. Require the checkpoint's
+    explicit embedding fields rather than treating every Mistral3 as an embedder.
+    """
+    fields = config.to_dict()
+    return (
+        config.architectures == ["Mistral3Model"]
+        and fields.get("is_causal") is False
+        and fields.get("pooling") == "avg"
+    )
+
+
 def is_generation_model(model_architectures: List[str], is_embedding: bool = False):
     # We have two ways to determine whether a model is a generative model.
     # 1. Check the model architecture
@@ -2569,6 +2586,7 @@ def is_generation_model(model_architectures: List[str], is_embedding: bool = Fal
         or "CLIPModel" in model_architectures
         or "BertModel" in model_architectures
         or "EmbeddingNemotron3Model" in model_architectures
+        or "EmbeddingNemotron35Model" in model_architectures
         or "Contriever" in model_architectures
         or "BertForSequenceClassification" in model_architectures
         or "XLMRobertaModel" in model_architectures
@@ -2583,6 +2601,7 @@ def is_generation_model(model_architectures: List[str], is_embedding: bool = Fal
 
 
 multimodal_model_archs = [
+    "EmbeddingNemotron35Model",
     "CLIPModel",
     "Cohere2VisionForConditionalGeneration",
     "Cosmos3EdgeForConditionalGeneration",

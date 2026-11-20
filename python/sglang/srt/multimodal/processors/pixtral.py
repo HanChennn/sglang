@@ -121,7 +121,16 @@ class PixtralProcessor(BaseMultimodalProcessor):
         all_offsets = old_item.offsets
         old_feature = old_item.feature
         old_image_sizes = old_item.model_specific_data.get("image_sizes")
-        image_nrows = self._get_image_nrows(images)
+        if old_image_sizes is not None:
+            # The processor's resize limit can differ from vision_config.image_size.
+            # Use the actual processed heights so row offsets match the features.
+            if len(old_image_sizes) != len(images):
+                raise ValueError("Pixtral image_sizes count does not match the images")
+            image_nrows = [
+                int(size[0]) // self._effective_patch_size for size in old_image_sizes
+            ]
+        else:
+            image_nrows = self._get_image_nrows(images)
         if old_feature is None or len(old_feature) != len(image_nrows):
             raise ValueError(
                 "Pixtral multi-image feature count does not match the number of "

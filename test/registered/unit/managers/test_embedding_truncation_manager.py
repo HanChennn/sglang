@@ -25,11 +25,12 @@ from sglang.srt.tokenizer.tiktoken_tokenizer import (
     TiktokenTokenizer,
 )
 from sglang.test.ci.ci_register import register_cpu_ci
+from sglang.test.test_utils import CustomTestCase
 
 register_cpu_ci(est_time=3, suite="base-a-test-cpu")
 
 
-class TestEmbeddingTruncationManager(unittest.IsolatedAsyncioTestCase):
+class TestEmbeddingTruncationManager(unittest.IsolatedAsyncioTestCase, CustomTestCase):
     def setUp(self):
         override = get_context().override_server_args(
             chunked_prefill_size=-1, max_prefill_tokens=100
@@ -217,18 +218,68 @@ class TestEmbeddingTruncationManager(unittest.IsolatedAsyncioTestCase):
         processor.finalize_cache_identities.assert_called_once_with(original)
 
     async def test_mm_batch_cannot_skip_processor_when_batch_encoding_enabled(self):
-        req = self.request(
-            text=["with image", "text only"],
-            image_data=[["image"], []],
-            embedding_truncate="END",
+        """Native batches without a budget must retain image tokens and features."""
+        override = get_context().override_server_args(
+            chunked_prefill_size=-1,
+            max_prefill_tokens=100,
+            enable_tokenizer_batch_encode=True,
         )
-        self.manager._tokenize_one_request = AsyncMock(side_effect=["first", "second"])
-        self.manager._tokenize_texts = AsyncMock()
-        self.assertEqual(
-            await self.manager._batch_tokenize_and_process(2, req), ["first", "second"]
+        override.install()
+        self.addCleanup(override.restore)
+        self.manager.tokenizer = self.text_tokenizer("$A")
+        feature = torch.arange(6).reshape(2, 3)
+        processed = MultimodalProcessorOutput(
+            input_ids=[90, 91, 92, 93],
+            mm_items=[
+                MultimodalDataItem(
+                    modality=Modality.IMAGE, offsets=[(1, 2)], feature=feature
+                )
+            ],
         )
-        self.assertEqual(self.manager._tokenize_one_request.await_count, 2)
-        self.manager._tokenize_texts.assert_not_called()
+        self.manager.mm_processor = SimpleNamespace(
+            prefer_tokenized_input=False,
+            process_mm_data_async=AsyncMock(return_value=processed),
+            finalize_cache_identities=Mock(),
+        )
+        dispatched = []
+
+        async def send_batch(items):
+            dispatched.append(items)
+
+        async def response(obj, request):
+            yield obj.rid
+
+        # The scheduler transport is the boundary; all tokenization, multimodal
+        # expansion, truncation, batch selection and response collection are real.
+        self.manager._send_batch_request = send_batch
+        self.manager._wait_one_response = response
+        for policy in (None, "END"):
+            with self.subTest(policy=policy):
+                dispatched.clear()
+                req = self.request(
+                    text=["a", "b"],
+                    image_data=[["image"], None],
+                    embedding_truncate=policy,
+                )
+                self.manager.rid_to_state = {rid: SimpleNamespace() for rid in req.rid}
+                responses = [
+                    result
+                    async for result in self.manager._handle_batch_request(
+                        req, None, {}
+                    )
+                ]
+                self.assertEqual(responses, [req.rid])
+                self.assertEqual(len(dispatched), 1)
+                image_request, text_request = dispatched[0]
+                self.assertEqual(image_request.input_ids, [90, 91, 92, 93])
+                self.assertEqual(image_request.mm_inputs.mm_items[0].offsets, [(1, 2)])
+                torch.testing.assert_close(
+                    image_request.mm_inputs.mm_items[0].feature, feature
+                )
+                self.assertEqual(
+                    text_request.input_ids, self.manager.tokenizer("b")["input_ids"]
+                )
+                self.assertIsNone(text_request.mm_inputs)
 
     async def test_rendered_template_special_token_flag_reaches_single_and_batch(self):
         for texts in ("rendered", ["rendered 1", "rendered 2"]):

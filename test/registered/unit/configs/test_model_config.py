@@ -22,6 +22,8 @@ from sglang.srt.configs.model_config import (
     get_hybrid_layer_ids,
     is_embedding_gemma,
     is_embedding_nemotron3,
+    is_embedding_nemotron35,
+    is_generation_model,
     is_hybrid_swa_model,
     is_layer_types_hybrid_swa_model,
     is_multimodal_model,
@@ -157,6 +159,60 @@ class TestEmbeddingNemotron3Config(CustomTestCase):
         ):
             with self.subTest(fields=fields):
                 self.assertFalse(is_embedding_nemotron3(PretrainedConfig(**fields)))
+
+
+class TestEmbeddingNemotron35Config(CustomTestCase):
+    def test_detects_embedding_without_misclassifying_generative_mistral3(self):
+        """A bare architecture alone cannot select the bidirectional embedder."""
+        cases = (
+            (
+                {
+                    "architectures": ["Mistral3Model"],
+                    "is_causal": False,
+                    "pooling": "avg",
+                },
+                True,
+            ),
+            ({"architectures": ["Mistral3Model"]}, False),
+            ({"architectures": ["Mistral3Model"], "pooling": "avg"}, False),
+            ({"architectures": ["Mistral3Model"], "is_causal": False}, False),
+            (
+                {
+                    "architectures": ["Mistral3Model"],
+                    "is_causal": True,
+                    "pooling": "avg",
+                },
+                False,
+            ),
+            (
+                {
+                    "architectures": ["Mistral3ForConditionalGeneration"],
+                    "is_causal": False,
+                    "pooling": "avg",
+                },
+                False,
+            ),
+            (
+                {
+                    "architectures": ["Ministral3Model"],
+                    "is_causal": False,
+                    "pooling": "avg",
+                },
+                False,
+            ),
+        )
+        for fields, expected in cases:
+            with self.subTest(fields=fields):
+                self.assertEqual(
+                    is_embedding_nemotron35(PretrainedConfig(**fields)), expected
+                )
+
+    def test_registered_embedder_uses_multimodal_embedding_dispatch(self):
+        """Model-config and processor dispatch must agree on the native name."""
+        architecture = ["EmbeddingNemotron35Model"]
+        self.assertFalse(is_generation_model(architecture))
+        self.assertTrue(is_multimodal_model(architecture))
+        self.assertTrue(is_generation_model(["Mistral3ForConditionalGeneration"]))
 
 
 class TestDraftModelConfig(CustomTestCase):

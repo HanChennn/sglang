@@ -5,7 +5,7 @@ description: Dense and sparse embedding models with FlashInfer acceleration and 
 SGLang provides robust support for embedding models by integrating efficient serving mechanisms with its flexible programming interface. This integration allows for streamlined handling of embedding tasks, facilitating faster and more accurate retrieval and semantic search operations. SGLang's architecture enables better resource utilization and reduced latency in embedding model deployment.
 
 <Warning>
-Native encoder embedding architectures, `google/embeddinggemma-300m` and `nvidia/Nemotron-3-Embed-1B-BF16` are detected automatically. Decoder-style embedding models require `--is-embedding`; add `--trust-remote-code` when the model requires it.
+Native encoder embedding architectures, `google/embeddinggemma-300m`, `nvidia/Nemotron-3-Embed-1B-BF16`, and the BF16 Nemotron-3.5-Embed models are detected automatically. Decoder-style embedding models require `--is-embedding`; add `--trust-remote-code` when the model requires it.
 </Warning>
 
 ## Quick Start
@@ -37,6 +37,72 @@ sglang serve --model-path nvidia/Nemotron-3-Embed-1B-BF16
 ```
 
 It is not supported on ROCm. SGLang disables radix cache and chunked prefill for this model, and skips the KV cache allocation when the prefill attention backend is FA3 or FA4. Prepend the task prefix to each input text as described in the model card, for example `query: ...` or `passage: ...`.
+
+### Nemotron-3.5-Embed
+
+The BF16 1B and 8B checkpoints combine a Pixtral vision encoder, multimodal projector, and bidirectional Ministral3 text backbone. Both use normalized mean pooling over valid text and image positions. The output has 2048 dimensions for 1B and 4096 for 8B. Queries contain text; documents can contain text, images, or both.
+
+On Linux with one NVIDIA CUDA GPU, start the 1B checkpoint with tensor parallelism set to one:
+
+```bash
+sglang serve \
+  --model-path nvidia/Nemotron-3.5-Embed-1B-BF16 \
+  --revision e24ca1e346bcc53572bd7bdc02b3e8ebf66c197c \
+  --dtype bfloat16 \
+  --tp 1 \
+  --host 127.0.0.1 \
+  --port 30000
+```
+
+For 8B, replace the model path with `nvidia/Nemotron-3.5-Embed-8B-BF16` and the revision with `781e779ee4ca9c2d2a4f38321993556baeab49a1`. Use a GPU with sufficient memory for the checkpoint and image activations. No API key is configured in this example. The checkpoint's retrieval template is loaded automatically; SGLang disables radix cache and chunked prefill for its bidirectional attention.
+
+Use [`/v2/embed`](/docs/basic_usage/cohere_api_embeddings) with `input_type="query"` or `input_type="document"` to apply the checkpoint's task prefix and image-before-text template. Do not add a second prefix to the text. This client requires `requests` and a local `image.png`:
+
+```python
+import base64
+from pathlib import Path
+
+import requests
+
+url = "http://127.0.0.1:30000/v2/embed"
+query = requests.post(
+    url,
+    json={"texts": ["What is shown in the picture?"], "input_type": "query"},
+    timeout=120,
+)
+query.raise_for_status()
+
+image_url = "data:image/png;base64," + base64.b64encode(
+    Path("image.png").read_bytes()
+).decode("ascii")
+document = requests.post(
+    url,
+    json={
+        "input_type": "document",
+        "truncate": "NONE",
+        "inputs": [{"content": [
+            {"type": "image_url", "image_url": {"url": image_url}},
+            {"type": "text", "text": "A technical diagram."},
+        ]}],
+    },
+    timeout=120,
+)
+document.raise_for_status()
+print(len(query.json()["embeddings"]["float"][0]))
+print(len(document.json()["embeddings"]["float"][0]))
+```
+
+Each `inputs` object produces one vector, combining all of its content blocks. To embed an image alone, use `{"images": [image_url], "input_type": "document"}`. Native `/encode` accepts an already rendered retrieval prompt and the corresponding `image_data`; it does not add the query or document prefix.
+
+The registered accuracy test compares both pinned checkpoints against Hugging Face BF16/SDPA with masked FP32 mean pooling. It covers text, images, combined inputs, multiple images, and batch permutations through `/encode` and `/v2/embed`. Run it on an NVIDIA H100 with FA3 available:
+
+```bash
+python test/registered/accuracy/embedding/test_nemotron35_embedding.py
+```
+
+<Note>
+Both BF16 checkpoints passed numerical validation against the Hugging Face reference on NVIDIA GB200 with tensor parallelism set to one, `trtllm_mha` text attention, and `sdpa` multimodal attention. NVFP4 checkpoints, ROCm, and tensor parallelism greater than one are outside this validation scope.
+</Note>
 
 ### Client Request
 
@@ -158,6 +224,12 @@ print("Embedding:", response["data"][0]["embedding"])
       <td style={{padding: "9px 12px", backgroundColor: "rgba(255,255,255,0.05)"}}>`nvidia/Nemotron-3-Embed-1B-BF16`</td>
       <td style={{padding: "9px 12px", backgroundColor: "rgba(255,255,255,0.02)"}}>N/A</td>
       <td style={{padding: "9px 12px", backgroundColor: "rgba(255,255,255,0.05)"}}>Bidirectional Ministral3 encoder with normalized mean pooling; auto-detected</td>
+    </tr>
+    <tr>
+      <td style={{padding: "9px 12px", fontWeight: 500, backgroundColor: "rgba(255,255,255,0.02)"}}>Nemotron-3.5-Embed (BF16)</td>
+      <td style={{padding: "9px 12px", backgroundColor: "rgba(255,255,255,0.05)"}}>`nvidia/Nemotron-3.5-Embed-1B-BF16`, `nvidia/Nemotron-3.5-Embed-8B-BF16`</td>
+      <td style={{padding: "9px 12px", backgroundColor: "rgba(255,255,255,0.02)"}}>Checkpoint retrieval template</td>
+      <td style={{padding: "9px 12px", backgroundColor: "rgba(255,255,255,0.05)"}}>Text and image embeddings with normalized mean pooling; auto-detected; validated on GB200 (BF16, TP=1, trtllm_mha)</td>
     </tr>
     <tr>
       <td style={{padding: "9px 12px", fontWeight: 500, backgroundColor: "rgba(255,255,255,0.02)"}}>E5 (Llama/Mistral based)</td>

@@ -1,5 +1,6 @@
 """NVIDIA Nemotron-3-Embed: a bidirectional Ministral3 with normalized mean pooling."""
 
+from copy import deepcopy
 from typing import Iterable, Optional, Tuple
 
 import torch
@@ -32,8 +33,13 @@ class EmbeddingNemotron3Model(Ministral3ForCausalLM):
         quant_config: Optional[QuantizationConfig] = None,
         prefix: str = "",
     ) -> None:
-        # The checkpoint ties word embeddings, so the inherited lm_head is
-        # only an alias of embed_tokens and adds no parameters.
+        # Embedding checkpoints have no LM head, including the 8B checkpoint
+        # whose config has tie_word_embeddings=False. Keep the inherited head
+        # as an unused alias instead of allocating an uninitialized vocabulary
+        # projection. Do not mutate the caller's checkpoint config.
+        if not config.tie_word_embeddings:
+            config = deepcopy(config)
+            config.tie_word_embeddings = True
         super().__init__(config, quant_config=quant_config, prefix=prefix)
         self.pooler = _FP32Pooler(pooling_type=PoolingType.MEAN, normalize=True)
         for layer in self.model.layers[self.model.start_layer : self.model.end_layer]:

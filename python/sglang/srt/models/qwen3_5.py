@@ -265,21 +265,26 @@ if _is_cuda:
     )
 
 if _is_cpu:
-    _fused_sigmoid_mul_cpu = torch.ops.sgl_kernel.fused_sigmoid_mul_cpu
-
+    # Processor-only imports must not require optional CPU model kernels.
     def fused_sigmoid_mul(x, gate, inplace=True):
         if not inplace:
             x = x.clone()
-        _fused_sigmoid_mul_cpu(x, gate)
+        torch.ops.sgl_kernel.fused_sigmoid_mul_cpu(x, gate)
         return x
 
-    fused_qk_gemma_rmsnorm = torch.ops.sgl_kernel.fused_qk_gemma_rmsnorm_cpu
-    fused_qk_gemma_rmsnorm_with_gate = (
-        torch.ops.sgl_kernel.fused_qk_gemma_rmsnorm_with_gate_cpu
-    )
-    fused_qkvzba_split_reshape_cat_contiguous = (
-        torch.ops.sgl_kernel.fused_qkvzba_split_reshape_cat_contiguous_cpu
-    )
+    def fused_qk_gemma_rmsnorm(*args, **kwargs):
+        return torch.ops.sgl_kernel.fused_qk_gemma_rmsnorm_cpu(*args, **kwargs)
+
+    def fused_qk_gemma_rmsnorm_with_gate(*args, **kwargs):
+        return torch.ops.sgl_kernel.fused_qk_gemma_rmsnorm_with_gate_cpu(
+            *args, **kwargs
+        )
+
+    def fused_qkvzba_split_reshape_cat_contiguous(*args, **kwargs):
+        return torch.ops.sgl_kernel.fused_qkvzba_split_reshape_cat_contiguous_cpu(
+            *args, **kwargs
+        )
+
 
 if _is_npu:
     from sgl_kernel_npu.activation.fused_sigmoid_mul import (

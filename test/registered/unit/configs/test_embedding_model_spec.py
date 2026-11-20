@@ -16,11 +16,12 @@ from sglang.srt.configs.embedding_model_spec import (
 )
 from sglang.srt.server_args import ServerArgs
 from sglang.test.ci.ci_register import register_cpu_ci
+from sglang.test.test_utils import CustomTestCase
 
 register_cpu_ci(est_time=6, suite="base-a-test-cpu")
 
 
-class TestEmbeddingModelSpec(unittest.TestCase):
+class TestEmbeddingModelSpec(CustomTestCase):
     def test_embedding_gemma_declares_full_encoder_bcg_contract(self):
         spec = resolve_embedding_model_spec(
             ["Gemma3TextModel"],
@@ -57,6 +58,44 @@ class TestEmbeddingModelSpec(unittest.TestCase):
         self.assertTrue(spec.safe_disable_chunked_prefill)
         self.assertTrue(spec.safe_disable_kv_cache)
         self.assertTrue(spec.encoder_only_attention)
+
+    def test_nemotron35_multimodal_contract_disables_partial_prefill_and_prefix_reuse(
+        self,
+    ):
+        """Bidirectional image/text embeddings must process each complete request."""
+        spec = resolve_embedding_model_spec(
+            ["EmbeddingNemotron35Model"],
+            is_embedding_requested=False,
+            is_embedding_gemma=False,
+        )
+        self.assertEqual(spec.execution, EmbeddingExecution.MULTIMODAL)
+        self.assertEqual(spec.attention, AttentionPattern.BIDIRECTIONAL)
+        self.assertEqual(spec.pooling, PoolingStrategy.MEAN)
+        self.assertTrue(spec.normalize)
+        self.assertTrue(spec.supports_multimodal)
+        self.assertTrue(spec.encoder_only_attention)
+        for backend in ("fa3", "trtllm_mha"):
+            with self.subTest(backend=backend):
+                args = ServerArgs(model_path="dummy", attention_backend=backend)
+                args._model_config = SimpleNamespace(
+                    embedding_model_spec=spec,
+                    joint_head_config=None,
+                    pointer_head=None,
+                    is_multimodal=True,
+                    is_multimodal_chunked_prefill_supported=False,
+                    hf_config=SimpleNamespace(
+                        architectures=["EmbeddingNemotron35Model"],
+                        model_type="mistral3",
+                    ),
+                )
+                handle_model_capability_adjustments(args)
+                self.assertTrue(resolution_result(args, "is_embedding"))
+                self.assertTrue(resolution_result(args, "disable_radix_cache"))
+                self.assertEqual(resolution_result(args, "chunked_prefill_size"), -1)
+                # KV-free multimodal execution is not enabled without validation.
+                self.assertFalse(
+                    resolution_result(args, "prefill_only_disable_kv_cache")
+                )
 
     def _resolve_nemotron3_embedding_args(self, attention_backend):
         args = ServerArgs(model_path="dummy", attention_backend=attention_backend)
@@ -107,7 +146,7 @@ class TestEmbeddingModelSpec(unittest.TestCase):
         matrix = embedding_support_matrix()
         by_architecture = {row["architecture"]: row for row in matrix}
 
-        self.assertEqual(len(matrix), 9)
+        self.assertEqual(len(matrix), 10)
         self.assertIn("EmbeddingGemma2Model", by_architecture)
         self.assertTrue(by_architecture["EmbeddingGemma2Model"]["supports_multimodal"])
         self.assertEqual(by_architecture["BertModel"]["family"], "bert")

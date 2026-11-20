@@ -2000,12 +2000,10 @@ class TokenizerManager(TokenizerControlMixin, TokenizerManagerScoreMixin):
         """Handle batch tokenization for text inputs only."""
         logger.debug(f"Starting batch tokenization for {batch_size} text requests")
 
-        # A request-scoped token budget applies after processor expansion, so
-        # budgeted multimodal embeddings take the per-request path.
+        # Multimodal embeddings need per-request processor expansion before
+        # atomic batch submission, including native requests without a budget.
         if any(
-            isinstance(obj[i], EmbeddingReqInput)
-            and obj[i].embedding_truncate is not None
-            and obj[i].contains_mm_input()
+            isinstance(obj[i], EmbeddingReqInput) and obj[i].contains_mm_input()
             for i in range(batch_size)
         ):
             return [await self._tokenize_one_request(obj[i]) for i in range(batch_size)]
