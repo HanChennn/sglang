@@ -138,7 +138,7 @@ class TestEmbeddingTruncationManager(unittest.IsolatedAsyncioTestCase):
         override.install()
         self.addCleanup(override.restore)
         self.manager = TokenizerManager.__new__(TokenizerManager)
-        self.manager.context_len = 16
+        self.manager.max_req_len = 16
         self.manager.num_reserved_tokens = 1
         self.manager.max_req_input_len = 14
         self.manager.allow_auto_truncate = True

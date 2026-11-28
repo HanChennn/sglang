@@ -27,23 +27,20 @@ from sglang.srt.managers.req_types import MultimodalProcessorOutput
 
 def embedding_input_token_limit(
     *,
-    context_len: int,
-    num_reserved_tokens: int,
     max_req_input_len: Optional[int],
     max_prefill_tokens: Optional[int] = None,
 ) -> int:
     """Return the inclusive input budget accepted by the existing serving path.
 
-    Both the tokenizer's context check and the scheduler's input check use >=,
-    so their upper bounds are exclusive. The scheduler may advertise a smaller
-    limit than context_len because of KV capacity and reserved slots. Without
-    chunked prefill, the entire input must also fit in one prefill.
+    The server accepts prompts up to max_req_input_len tokens (inclusive),
+    which already accounts for context_len, KV capacity, and reserved slots.
+    Without chunked prefill, the entire input must also fit in one prefill.
     """
-    limits = [context_len - num_reserved_tokens - 1]
-    if max_req_input_len is not None:
-        limits.append(max_req_input_len - 1)
-    if max_prefill_tokens is not None:
-        limits.append(max_prefill_tokens)
+    limits = [
+        limit for limit in (max_req_input_len, max_prefill_tokens) if limit is not None
+    ]
+    if not limits:
+        raise ValueError("The server has no available embedding input token budget.")
     limit = min(limits)
     if limit < 1:
         raise ValueError("The server has no available embedding input token budget.")
